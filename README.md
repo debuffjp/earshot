@@ -120,7 +120,7 @@ const joined = await joinVoiceRoom({
   mic,
   listener: ear,
   ipPolicy: "relay", // Or "direct": see below.
-  pos: (peer) => players.get(peer),
+  pos: (peer) => players.get(peer) ?? spawn,
   onMessage: (peer, position) => players.set(peer, position),
 });
 

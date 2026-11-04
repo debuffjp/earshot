@@ -129,7 +129,7 @@ if (joined.ok) setInterval(() => joined.room.send(player), 66);
 
 `ipPolicy` is required because it's a privacy decision. `"relay"` hides IP addresses from other players and fails rather than falling back, but all voice is billed as TURN traffic. `"direct"` costs less, and players can see each other's IP addresses.
 
-Everyone connects to everyone, so upload grows with each player. Rooms stop sending to players well out of range. Errors come back as `joined.error`: `room-full`, `no-turn-server`, `mic-not-started` or `connection-failed`. Dropped connections don't rejoin on their own yet, and `room.connection(peer)` lets you show that.
+Everyone connects to everyone, so upload grows with each player. Rooms stop sending to players well out of range. Errors come back as `joined.error`: `room-full`, `no-turn-server`, `mic-not-started` or `connection-failed`. Dropped connections don't rejoin automatically, and `room.connection(peer)` lets you show that.
 
 **These controls don't make your game compliant.** Live voice between players can bring legal duties, especially where children may play: COPPA in the US and the Online Safety Act in the UK, for example. A library in the browser can't verify ages, enforce bans, moderate or take reports, so those are yours to plan for. Keep voice off by default and limit it to friends. This isn't legal advice.
 

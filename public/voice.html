@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Two Tabs Apart</title>
+<style>
+body{margin:0;background:#16161d;color:#eee;font:14px system-ui,sans-serif;-webkit-user-select:none;user-select:none}
+main{max-width:720px;margin:auto;padding:10px 16px}
+h1{font-size:20px;margin:2px 0}p{margin:4px 0 8px;color:#aaa}
+canvas{width:100%;touch-action:none;border-radius:12px;display:block;margin-bottom:8px}
+button,select{font:inherit;padding:10px 14px;border:0;border-radius:10px;background:#34343f;color:#eee;font-weight:600;margin:0 6px 8px 0}
+button.on{background:#cffb2d;color:#16161d}
+pre{font:12px ui-monospace,monospace;background:#22222b;padding:8px;border-radius:8px;white-space:pre-wrap;margin:0}
+</style></head><body><main>
+<h1>Two Tabs Apart</h1>
+<p id="say">Open this page on two devices on the same Wi-Fi, in different rooms or with headphones, and press Join on both. Drag to move.</p>
+<div><select id="ec"><option value="all">Echo cancel: all</option><option value="on" selected>Echo cancel: on</option><option value="off">Echo cancel: off</option></select><button id="join" class="on">Join</button><button id="mute">Mute</button><button id="ptt">Push to talk: off</button><button id="walls" class="on">Walls: on</button></div>
+<canvas id="c" width="768" height="448"></canvas>
+<pre id="info">Your voice goes directly to the other device on this network. Nothing is recorded.</pre>
+</main><script type="module">
+import { createListener, wallsOnGrid } from "/dist/index.js";
+const $ = (id) => document.getElementById(id);
+const W = 24, H = 14, T = 32;
+const tiles = Array.from({ length: H }, () => Array(W).fill(null));
+for (let y = 0; y < 7; y++) tiles[y][10] = "thin";
+for (let y = 7; y < H; y++) tiles[y][10] = "solid";
+for (let x = 11; x < W; x++) tiles[7][x] = "solid";
+for (let y = 0; y < 4; y++) tiles[y][15] = "solid";
+for (let x = 15; x < W; x++) tiles[3][x] = "solid";
+tiles[3][10] = null;
+const roomAt = (s) => (s.x < 10 ? null : s.y >= 8 ? "cave" : "room");
+const fill = { null: "#2a2a35", room: "#2f3a4a", cave: "#3a2f4a" };
+
+const id = crypto.randomUUID();
+const me = { x: 5.5, y: 5.5 }, them = { x: 14.5, y: 5 };
+let ctx, ear, voice, pc, channel, stream, muted = false, ptt = false, talking = false, walls = true, bypassed = false;
+let remoteLevel = 0, remoteAnalyser, pending = [];
+const stats = { state: "not joined" };
+const post = (message) => fetch(`/signal?id=${id}`, { method: "POST", body: JSON.stringify(message) });
+
+function applyMic() {
+  const track = stream?.getAudioTracks()[0];
+  if (track) track.enabled = !muted && (!ptt || talking);
+}
+$("mute").onclick = (e) => { muted = !muted; e.target.textContent = muted ? "Muted" : "Mute"; e.target.className = muted ? "on" : ""; applyMic(); };
+$("ptt").onclick = (e) => { ptt = !ptt; e.target.textContent = `Push to talk: ${ptt ? "on (hold Space or the map's corner)" : "off"}`; e.target.className = ptt ? "on" : ""; applyMic(); };
+$("walls").onclick = (e) => { walls = !walls; e.target.textContent = `Walls: ${walls ? "on" : "off"}`; e.target.className = walls ? "on" : ""; };
+addEventListener("keydown", (e) => { if (e.key === " ") { e.preventDefault(); talking = true; applyMic(); } });
+addEventListener("keyup", (e) => { if (e.key === " ") { talking = false; applyMic(); } });
+
+function makePeer() {
+  pc = new RTCPeerConnection();
+  stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+  pc.onicecandidate = (e) => { if (e.candidate) post({ type: "ice", candidate: e.candidate }); };
+  pc.onconnectionstatechange = () => { stats.state = pc?.connectionState ?? "closed"; };
+  pc.ondatachannel = (e) => useChannel(e.channel);
+  pc.ontrack = (e) => {
+    // Chrome reportedly keeps a remote stream silent in Web Audio unless an element also plays it, muted.
+    const element = new Audio(); element.srcObject = e.streams[0]; element.muted = true; element.play().catch(() => {});
+    window.demo.element = element;
+    const node = ctx.createMediaStreamSource(e.streams[0]);
+    remoteAnalyser = new AnalyserNode(ctx, { fftSize: 1024 }); node.connect(remoteAnalyser);
+    voice?.remove();
+    voice = ear.source(node, { pos: () => them });
+    window.demo.heard = true;
+  };
+}
+function useChannel(c) {
+  channel = c;
+  c.onmessage = (e) => { const p = JSON.parse(e.data); them.x = p.x; them.y = p.y; window.demo.gotPosition = true; };
+}
+async function flushIce() { for (const c of pending) await pc.addIceCandidate(c); pending = []; }
+async function onSignal(m) {
+  if (m.type === "full") stats.state = "room full: two players at most";
+  if (m.type === "welcome" && m.seat === 1) { me.x = 14.5; me.y = 5; them.x = 5.5; them.y = 5.5; }
+  if (m.type === "welcome") stats.state = m.seat === 0 ? "waiting for the other device" : "connecting";
+  if (m.type === "join") {
+    makePeer(); useChannel(pc.createDataChannel("pos", { ordered: false, maxRetransmits: 0 }));
+    await pc.setLocalDescription(await pc.createOffer());
+    post({ type: "offer", sdp: pc.localDescription });
+  }
+  if (m.type === "offer") {
+    makePeer();
+    await pc.setRemoteDescription(m.sdp); await flushIce();
+    await pc.setLocalDescription(await pc.createAnswer());
+    post({ type: "answer", sdp: pc.localDescription });
+  }
+  if (m.type === "answer") { await pc.setRemoteDescription(m.sdp); await flushIce(); }
+  if (m.type === "ice") { if (pc?.remoteDescription) await pc.addIceCandidate(m.candidate); else pending.push(m.candidate); }
+  if (m.type === "leave") { pc?.close(); pc = channel = null; voice?.remove(); voice = null; remoteAnalyser = null; stats.state = "the other device left"; }
+}
+$("join").onclick = async () => {
+  $("join").disabled = true; $("ec").disabled = true; $("join").className = "";
+  ctx = new AudioContext();
+  await ctx.resume();
+  document.addEventListener("pointerdown", () => { if (ctx.state !== "running") ctx.resume(); });
+  ear = createListener(ctx, { pos: () => me, world: { wallsBetween: (a, b) => (walls ? wallsOnGrid(tiles, a, b) : []), reverbAt: (p) => roomAt(p) } });
+  const v = $("ec").value;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: v === "all" ? "all" : v === "on", noiseSuppression: v !== "off", autoGainControl: v !== "off" } });
+  } catch (e) { stats.state = `mic unavailable: ${e.name}`; return; }
+  stats.applied = stream.getAudioTracks()[0].getSettings();
+  applyMic();
+  new EventSource(`/signal?id=${id}`).onmessage = (e) => onSignal(JSON.parse(e.data));
+};
+
+const c = $("c"), g = c.getContext("2d");
+function move(e) {
+  if (e.pointerType === "mouse" && !e.buttons) return;
+  const r = c.getBoundingClientRect();
+  me.x = Math.max(.5, Math.min(W - .5, (e.clientX - r.left) / r.width * W));
+  me.y = Math.max(.5, Math.min(H - .5, (e.clientY - r.top) / r.height * H));
+}
+c.onpointerdown = (e) => {
+  c.setPointerCapture(e.pointerId);
+  const r = c.getBoundingClientRect();
+  if (ptt && e.clientX - r.left > r.width * .85 && e.clientY - r.top > r.height * .75) { talking = true; applyMic(); return; }
+  move(e);
+};
+c.onpointermove = (e) => { if (!talking) move(e); };
+c.onpointerup = () => { talking = false; applyMic(); };
+
+function blob(s, col, ring) {
+  if (ring > 0) { g.strokeStyle = col; g.lineWidth = 3; g.beginPath(); g.arc(s.x * T, s.y * T, 20 + ring * 24, 0, 7); g.stroke(); }
+  g.fillStyle = col; g.beginPath(); g.ellipse(s.x * T, s.y * T, 14, 12, 0, 0, 7); g.fill();
+  g.fillStyle = "#16161d";
+  for (const o of [-5, 5]) { g.beginPath(); g.arc(s.x * T + o, s.y * T - 1, 2.2, 0, 7); g.fill(); }
+}
+const samples = new Float32Array(1024);
+let lastSend = 0;
+function frame(now) {
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    g.fillStyle = fill[roomAt({ x, y })]; g.fillRect(x * T, y * T, T, T);
+    if (tiles[y][x]) { g.fillStyle = tiles[y][x] === "thin" ? "#8795a8" : "#e8e8ef"; g.fillRect(x * T, y * T, T, T); }
+  }
+  if (ptt) { g.fillStyle = talking ? "#cffb2d" : "#ffffff33"; g.fillRect(W * T * .85, H * T * .75, W * T * .15, H * T * .25); g.fillStyle = talking ? "#16161d" : "#fff"; g.font = "bold 16px system-ui"; g.fillText("hold to talk", W * T * .86, H * T * .88); }
+  if (remoteAnalyser) { remoteAnalyser.getFloatTimeDomainData(samples); let s = 0; for (const v of samples) s += v * v; remoteLevel = Math.min(1, Math.sqrt(s / samples.length) * 8); }
+  blob(them, "#cffb2d", remoteLevel > .05 ? remoteLevel : 0); blob(me, "#ff8fb1", 0);
+  if (ear) {
+    ear.update();
+    if (channel?.readyState === "open" && now - lastSend > 66) { channel.send(JSON.stringify({ x: me.x, y: me.y })); lastSend = now; }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+setInterval(async () => {
+  if (pc) for (const r of (await pc.getStats()).values()) {
+    if (r.type === "candidate-pair" && r.nominated) { stats.rttMs = Math.round((r.currentRoundTripTime ?? 0) * 1000); }
+    if (r.type === "inbound-rtp" && r.kind === "audio") { stats.packets = r.packetsReceived; stats.lost = r.packetsLost; stats.jitterMs = Math.round((r.jitter ?? 0) * 1000); }
+  }
+  stats.voice = voice?.state; stats.walls = voice?.mix?.walls.join("+") || (voice ? "none" : undefined); stats.gain = voice?.mix?.gain.toFixed(2);
+  $("info").textContent = `Your voice goes directly to the other device on this network. Nothing is recorded.\n${Object.entries(stats).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join("\n")}`;
+}, 1000);
+window.demo = { stats, me, them, get voice() { return voice; }, get level() { return remoteLevel; } };
+</script></body></html>

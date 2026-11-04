@@ -50,10 +50,25 @@ try {
       far: await render(30, [], null),
       room: await render(1, [], "room"),
       cave: await render(1, [], "cave"),
+      attack: await (async () => {
+        const rate = 48000, ctx = new OfflineAudioContext(1, rate, rate);
+        const buffer = ctx.createBuffer(1, rate, rate);
+        buffer.getChannelData(0).fill(0.5);
+        const src = new AudioBufferSourceNode(ctx, { buffer });
+        const ear = createListener(ctx, { pos: () => ({ x: 0, y: 0 }) });
+        ear.source(src, { pos: () => ({ x: 1, y: 0 }) });
+        ear.update();
+        src.start();
+        const out = await ctx.startRendering();
+        return out.getChannelData(0)[480];
+      })(),
     };
   });
   console.log("live clock rate", result.clockRate.toFixed(3));
   delete result.clockRate;
+  console.log("level 10 ms after start", result.attack);
+  assert.ok(result.attack > 0.3, "a new sound starts at full level");
+  delete result.attack;
   console.table(result);
   const { clear, thin, solid, multi, far, room, cave } = result;
   assert.ok(Math.abs(clear.all - thin.all) > 6, "a thin wall is quieter");

@@ -55,12 +55,17 @@ export function distanceGain(d: number, full: number, silent: number): number {
  * name or nothing; adjacent tiles of one material count as one wall.
  */
 export function wallsOnGrid(tiles: ReadonlyArray<ReadonlyArray<string | null | undefined>>, a: Point, b: Point): string[] {
+  return wallsAlong((x, y) => tiles[y]?.[x], a, b);
+}
+
+/** Like `wallsOnGrid`, for maps that aren't nested arrays: `at(x, y)` gives a tile's material or nothing. */
+export function wallsAlong(at: (x: number, y: number) => string | null | undefined, a: Point, b: Point): string[] {
   const steps = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * 8) || 1;
   const found: string[] = [];
   let inside: string | null = null;
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
-    const wall = tiles[Math.floor(a.y + (b.y - a.y) * t)]?.[Math.floor(a.x + (b.x - a.x) * t)] ?? null;
+    const wall = at(Math.floor(a.x + (b.x - a.x) * t), Math.floor(a.y + (b.y - a.y) * t)) ?? null;
     if (wall && wall !== inside) found.push(wall);
     inside = wall;
   }
@@ -258,11 +263,18 @@ export function createListener(ctx: BaseAudioContext, options: ListenerOptions):
 
       const update = (listener: Point) => {
         const at = toTiles(pos());
+        const first = !mix;
         mix = computeMix(listener, at, options.world?.wallsBetween?.(at, listener) ?? [], params, materials);
         reverb = options.world?.reverbAt?.(at) ?? null;
         const t = ctx.currentTime;
         const tau = params.smoothing;
         const level = muted ? 0 : mix.gain;
+        // A new sound starts at its mix, so a door slam keeps its attack instead of fading in.
+        if (first) {
+          filter.frequency.setValueAtTime(mix.cutoff, t);
+          gain.gain.setValueAtTime(level, t);
+          pan.pan.setValueAtTime(mix.pan, t);
+        }
         filter.frequency.setTargetAtTime(mix.cutoff, t, tau);
         gain.gain.setTargetAtTime(level, t, tau);
         pan.pan.setTargetAtTime(mix.pan, t, tau);

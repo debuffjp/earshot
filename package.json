@@ -1,6 +1,6 @@
 {
   "name": "@debuffjp/earshot",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/debuffjp/earshot.git" },
   "homepage": "https://debuff.jp/earshot/",

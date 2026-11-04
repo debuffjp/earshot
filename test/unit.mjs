@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { distanceGain, wallsOnGrid, computeMix, createLevelDetector, DEFAULT_PARAMS as p, DEFAULT_MATERIALS as m } from "../dist/index.js";
+import { distanceGain, heardDb, wallsOnGrid, computeMix, createLevelDetector, DEFAULT_PARAMS as p, DEFAULT_MATERIALS as m } from "../dist/index.js";
 
 assert.equal(distanceGain(2, 2, 12), 1);
 assert.equal(distanceGain(12, 2, 12), 0);
@@ -22,6 +22,11 @@ assert.equal(computeMix(a, b, [T, S], p, m).cutoff, 700);
 assert.throws(() => computeMix(a, b, ["jelly"], p, m), /unknown material/);
 assert.equal(computeMix(a, { x: 8, y: 0 }, [], p, m).pan, 0.6);
 assert.equal(computeMix(a, { x: 0, y: 8 }, [], p, m).pan, 0, "vertical offset never pans");
+
+assert.equal(heardDb(3, { gain: 1 }), 30);
+assert.equal(heardDb(2, { gain: 0.1 }), 0);
+assert.equal(heardDb(0, { gain: 1 }), -Infinity, "silence is never heard");
+assert.equal(heardDb(3, { gain: 0 }), -Infinity, "out of range is never heard");
 
 const run = (d, db, ms) => { for (let t = 0; t < ms; t += 16) d.update(db, 16); return d.level; };
 const d = createLevelDetector();

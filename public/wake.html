@@ -21,7 +21,7 @@ pre{font:12px ui-monospace,monospace;background:#22222b;padding:8px;border-radiu
 <button id="hum" class="off">Hum (Space)</button><button id="shout" class="off">Shout (X)</button><button id="stopmic" class="off">Stop mic</button><button id="music" class="off">Music on/off</button><button id="again" class="off">Recalibrate</button>
 <pre id="info">Nothing is recorded. The sound level is measured on this device and no audio is sent anywhere.</pre>
 </main><script type="module">
-import { computeMix, createLoudness, wallsOnGrid, DEFAULT_MATERIALS, DEFAULT_PARAMS } from "/dist/index.js";
+import { computeMix, createLoudness, heardDb as heardAt, wallsOnGrid, DEFAULT_MATERIALS, DEFAULT_PARAMS } from "/dist/index.js";
 const $ = (id) => document.getElementById(id);
 const c = $("c"), g = c.getContext("2d");
 let ctx, musicBus, loud, keyLevel = 0, rawMode = true;
@@ -84,7 +84,6 @@ const S = 40;
 const WALL = { left: 320, right: 360, doorTop: 160, doorBottom: 240 };
 const tiles = Array.from({ length: 10 }, (_, y) => Array.from({ length: 16 }, (_, x) => (x === 8 && (y < 4 || y > 5) ? "solid" : null)));
 const inTiles = (p) => ({ x: p.x / S, y: p.y / S });
-const LEVEL_DB = [0, 10, 20, 30];
 const HEARING_DB = 6;
 let player, monster, chests, won, caught, heardDb = -99;
 const place = () => {
@@ -152,8 +151,7 @@ function step(dt, level) {
     if (!ch.open && level === 1 && Math.hypot(player.x - ch.x, player.y - ch.y) < 60) { ch.t += dt; if (ch.t >= 1.5) ch.open = true; }
   }
   const a = inTiles(player), b = inTiles(monster);
-  const gain = computeMix(a, b, wallsOnGrid(tiles, a, b), DEFAULT_PARAMS, DEFAULT_MATERIALS).gain;
-  heardDb = level ? LEVEL_DB[level] + 20 * Math.log10(gain + 1e-5) : -99;
+  heardDb = heardAt(level, computeMix(a, b, wallsOnGrid(tiles, a, b), DEFAULT_PARAMS, DEFAULT_MATERIALS));
   if (level >= 2 && heardDb >= HEARING_DB) { monster.state = "hunting"; monster.tx = player.x; monster.ty = player.y; monster.calm = 5; monster.fast = level === 3; }
   if (monster.state === "hunting") {
     // Through the door when the target is on the other side of the wall.

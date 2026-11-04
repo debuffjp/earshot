@@ -98,6 +98,14 @@ export function computeMix(listener: Point, source: Point, walls: readonly strin
   };
 }
 
+/**
+ * How loud a player's noise is at a point, in dB, for game rules such as a monster
+ * that hears through walls. `levelDb` gives the loudness of levels 0 to 3.
+ */
+export function heardDb(level: number, mix: Pick<Mix, "gain">, levelDb: readonly number[] = [-Infinity, 10, 20, 30]): number {
+  return (levelDb[level] ?? -Infinity) + 20 * Math.log10(mix.gain);
+}
+
 export interface World {
   /** Names of the materials between two points. Use `wallsOnGrid` for tile maps. */
   wallsBetween?(a: Point, b: Point): readonly string[];

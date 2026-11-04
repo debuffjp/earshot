@@ -59,6 +59,16 @@ loud.press(1);
 loud.press(0);
 ```
 
+To make walls and distance matter, check what the noise sounds like where the monster is. The threshold is yours to tune; 6 dB felt right in the Wake It demo.
+
+```ts
+import { computeMix, heardDb, wallsOnGrid, DEFAULT_MATERIALS, DEFAULT_PARAMS } from "earshot";
+
+const walls = wallsOnGrid(tiles, player, monster); // Both in tile units.
+const mix = computeMix(player, monster, walls, DEFAULT_PARAMS, DEFAULT_MATERIALS);
+if (loud.level >= 2 && heardDb(loud.level, mix) >= 6) monster.wake();
+```
+
 Audio goes to an analyser and no further: Earshot doesn't record it, send it or play it back. Levels are relative to the measured noise floor, so loud and quiet rooms behave alike.
 
 Always give players a key or button through `press()`. Don't require words or long strain, and tell players what the mic is for before asking.

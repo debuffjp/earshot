@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Wake It</title>
+<style>
+body{margin:0;background:#16161d;color:#eee;font:14px system-ui,sans-serif;-webkit-user-select:none;user-select:none}
+main{max-width:720px;margin:auto;padding:10px 16px}
+h1{font-size:20px;margin:2px 0}p{margin:4px 0 8px;color:#aaa}
+canvas{width:100%;touch-action:none;border-radius:12px;display:block}
+button{font:inherit;padding:10px 14px;border:0;border-radius:10px;background:#cffb2d;color:#16161d;font-weight:600;margin:0 6px 8px 0}
+button.off{background:#34343f;color:#eee}
+#meter{height:18px;background:#22222b;border-radius:9px;position:relative;overflow:hidden;margin:8px 0}
+#bar{height:100%;width:0;background:#cffb2d}
+.tick{position:absolute;top:0;bottom:0;width:2px;background:#fff8}
+pre{font:12px ui-monospace,monospace;background:#22222b;padding:8px;border-radius:8px;white-space:pre-wrap;margin:8px 0}
+</style></head><body><main>
+<h1>Wake It</h1>
+<p id="say">Tap Start and listen to the music first. Then turn on the mic and note whether it changes.</p>
+<div id="setup"><button id="start">Start music</button><button id="mic" class="off" disabled>Use mic</button><button id="keys" class="off" disabled>Keys only</button><button id="raw" class="off">Mic mode: raw</button></div>
+<canvas id="c" width="640" height="400"></canvas>
+<div id="meter"><div id="bar"></div></div>
+<button id="hum" class="off">Hum (Space)</button><button id="shout" class="off">Shout (X)</button><button id="stopmic" class="off">Stop mic</button><button id="music" class="off">Music on/off</button><button id="again" class="off">Recalibrate</button>
+<pre id="info">Nothing is recorded. The sound level is measured on this device and no audio is sent anywhere.</pre>
+</main><script type="module">
+import { createLoudness, rmsDb } from "./earshot.js";
+const $ = (id) => document.getElementById(id);
+const c = $("c"), g = c.getContext("2d");
+let ctx, musicBus, analyser, stream, buf, keyLevel = 0, micLevel = 0, micDb = -120, rawMode = true;
+const loud = createLoudness();
+let triggers = [0, 0, 0, 0], lastLevel = 0, calibrating = false;
+const log = { mode: "none" };
+
+function startMusic() {
+  ctx = new AudioContext();
+  log.before = { sampleRate: ctx.sampleRate, baseLatency: ctx.baseLatency };
+  musicBus = new GainNode(ctx, { gain: 0.35 });
+  musicBus.connect(ctx.destination);
+  const notes = [220, 277.2, 329.6, 440, 329.6, 277.2];
+  let i = 0, at = ctx.currentTime + .05;
+  setInterval(() => {
+    while (at < ctx.currentTime + .4) {
+      // Wide left/right notes and bright ticks make lost stereo or lost treble easy to hear.
+      const side = i % 2 ? 1 : -1;
+      const pan = new StereoPannerNode(ctx, { pan: side });
+      const o = new OscillatorNode(ctx, { type: "triangle", frequency: notes[i % 6] });
+      const e = new GainNode(ctx, { gain: 0 });
+      e.gain.setValueAtTime(.5, at); e.gain.exponentialRampToValueAtTime(.001, at + .3);
+      o.connect(e).connect(pan).connect(musicBus); o.start(at); o.stop(at + .32);
+      const t = new OscillatorNode(ctx, { type: "square", frequency: 9000 });
+      const te = new GainNode(ctx, { gain: 0 });
+      te.gain.setValueAtTime(.05, at); te.gain.exponentialRampToValueAtTime(.001, at + .03);
+      const tp = new StereoPannerNode(ctx, { pan: -side });
+      t.connect(te).connect(tp).connect(musicBus); t.start(at); t.stop(at + .04);
+      at += .25; i++;
+    }
+  }, 100);
+}
+$("start").onclick = () => {
+  if (ctx) return;
+  startMusic();
+  $("start").disabled = true; $("start").className = "off";
+  $("mic").disabled = $("keys").disabled = false; $("mic").className = "";
+  $("say").textContent = "Music is playing. Listen for the left and right notes and the bright ticks, then choose.";
+  showInfo();
+};
+$("raw").onclick = (e) => { rawMode = !rawMode; e.target.textContent = `Mic mode: ${rawMode ? "raw" : "browser processing"}`; };
+$("music").onclick = () => { if (musicBus) musicBus.gain.value = musicBus.gain.value ? 0 : .35; };
+$("keys").onclick = () => { log.mode = "keys"; begin(); };
+
+async function openMic() {
+  const on = !rawMode;
+  stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: on, noiseSuppression: on, autoGainControl: on } });
+  const src = ctx.createMediaStreamSource(stream);
+  analyser = new AnalyserNode(ctx, { fftSize: 2048 });
+  src.connect(analyser); // Never connected to the output.
+  buf = new Float32Array(analyser.fftSize);
+  log.mode = rawMode ? "mic raw" : "mic processed";
+  log.applied = stream.getAudioTracks()[0].getSettings();
+  log.after = { sampleRate: ctx.sampleRate, baseLatency: ctx.baseLatency };
+}
+async function calibrate() {
+  calibrating = true;
+  $("say").textContent = "Stay quiet for 3 seconds while I measure the room...";
+  const readings = [], end = performance.now() + 3000;
+  await new Promise((done) => { const tick = () => { if (!analyser) return done(); analyser.getFloatTimeDomainData(buf); readings.push(rmsDb(buf)); performance.now() < end ? setTimeout(tick, 30) : done(); }; tick(); });
+  if (analyser) { loud.calibrate(readings); triggers = [0, 0, 0, 0]; lastLevel = 0; }
+  calibrating = false;
+}
+$("mic").onclick = async () => {
+  try { await openMic(); await calibrate(); begin(); }
+  catch (e) { log.mode = "keys"; log.micError = e.name; begin(`Mic unavailable (${e.name}), so keys and buttons are in charge.`); }
+};
+$("again").onclick = async () => { if (analyser) { await calibrate(); begin(); } };
+$("stopmic").onclick = () => { stream?.getTracks().forEach((t) => t.stop()); stream = analyser = null; micLevel = 0; micDb = -120; log.mode = "keys"; $("say").textContent = "Mic stopped. Does the music recover? (WebKit bug 311451 says it may not.)"; showInfo(); };
+
+// Placeholder rules for testing mic feel, not a game design.
+const S = 40;
+let player, monster, chests, won, caught, open, opening, heardFor;
+const place = () => {
+  player = { x: 60, y: 340 }; monster = { x: 320, y: 190, state: "asleep", tx: 0, ty: 0, calm: 0 };
+  chests = [{ x: 90, y: 80 }, { x: 550, y: 80 }, { x: 560, y: 320 }].map((c) => ({ ...c, open: false, t: 0 }));
+  won = caught = false; heardFor = 0;
+};
+place();
+let playing = false;
+function begin(msg) {
+  playing = true; place();
+  $("setup").style.display = "none";
+  $("say").textContent = msg ?? "Hum softly beside a chest to open it. Get loud and the monster comes for that spot.";
+  $("hum").className = $("shout").className = "";
+  showInfo();
+}
+function showInfo() {
+  $("info").textContent = `Nothing is recorded or sent.\nmode: ${log.mode}${log.micError ? ` (${log.micError})` : ""}\ntriggers L1/L2/L3: ${triggers.slice(1).join(" / ")}\nfloor: ${loud.floor?.toFixed(1) ?? "-"} dB\nbefore mic: ${JSON.stringify(log.before)}\nafter mic: ${JSON.stringify(log.after ?? null)}\napplied: ${JSON.stringify(log.applied ?? null)}`;
+}
+const keys = {};
+addEventListener("keydown", (e) => {
+  keys[e.key] = true;
+  if (e.key === " ") { keyLevel = Math.max(keyLevel, 1); e.preventDefault(); }
+  if (e.key.toLowerCase() === "x") keyLevel = 3;
+});
+addEventListener("keyup", (e) => { keys[e.key] = false; if (e.key === " " || e.key.toLowerCase() === "x") keyLevel = 0; });
+for (const [id, l] of [["hum", 1], ["shout", 3]]) {
+  $(id).onpointerdown = () => { keyLevel = l; }; $(id).onpointerup = $(id).onpointerleave = () => { keyLevel = 0; };
+}
+let touch = null;
+c.onpointerdown = c.onpointermove = (e) => { if (!e.buttons && e.pointerType === "mouse") return; const r = c.getBoundingClientRect(); touch = { x: (e.clientX - r.left) / r.width * 640, y: (e.clientY - r.top) / r.height * 400 }; };
+c.onpointerup = () => { touch = null; };
+
+function blob(x, y, r, col, eyes = true, sleepy = false) {
+  g.fillStyle = col; g.beginPath(); g.ellipse(x, y, r, r * .85, 0, 0, 7); g.fill();
+  if (!eyes) return;
+  g.fillStyle = "#16161d";
+  for (const o of [-r / 2.6, r / 2.6]) { if (sleepy) g.fillRect(x + o - 3, y - 2, 6, 2); else { g.beginPath(); g.arc(x + o, y - 2, r / 7 + 1, 0, 7); g.fill(); } }
+}
+let prev = performance.now();
+function frame(now) {
+  const dt = Math.min(50, now - prev); prev = now;
+  if (analyser && !calibrating) {
+    analyser.getFloatTimeDomainData(buf); micDb = rmsDb(buf); micLevel = loud.update(micDb, dt);
+  }
+  const level = Math.max(micLevel, keyLevel);
+  if (playing && level !== lastLevel) { if (level > lastLevel) triggers[level]++; lastLevel = level; showInfo(); }
+  if (playing && !won && !caught) step(dt / 1000, level);
+  draw(level);
+  const over = loud.floor === null ? 0 : micDb - loud.floor;
+  const shown = analyser ? Math.max(0, Math.min(40, over)) / 40 : level / 4;
+  $("bar").style.width = shown * 100 + "%";
+  $("bar").style.background = ["#cffb2d", "#cffb2d", "#ffb02d", "#ff4d6d"][level];
+  requestAnimationFrame(frame);
+}
+function step(dt, level) {
+  const v = 170 * dt;
+  let dx = (keys.ArrowRight || keys.d ? 1 : 0) - (keys.ArrowLeft || keys.a ? 1 : 0), dy = (keys.ArrowDown || keys.s ? 1 : 0) - (keys.ArrowUp || keys.w ? 1 : 0);
+  if (touch) { dx = touch.x - player.x; dy = touch.y - player.y; if (Math.hypot(dx, dy) < 6) dx = dy = 0; }
+  const n = Math.hypot(dx, dy) || 1;
+  player.x = Math.max(20, Math.min(620, player.x + dx / n * v));
+  player.y = Math.max(20, Math.min(380, player.y + dy / n * v));
+  for (const ch of chests) {
+    if (!ch.open && level === 1 && Math.hypot(player.x - ch.x, player.y - ch.y) < 60) { ch.t += dt; if (ch.t >= 1.5) ch.open = true; }
+  }
+  if (level >= 2) { monster.state = "hunting"; monster.tx = player.x; monster.ty = player.y; monster.calm = 5; monster.fast = level === 3; }
+  if (monster.state === "hunting") {
+    const mx = monster.tx - monster.x, my = monster.ty - monster.y, d = Math.hypot(mx, my);
+    if (d > 4) { const mv = (monster.fast ? 190 : 110) * dt; monster.x += mx / d * mv; monster.y += my / d * mv; }
+    monster.calm -= dt;
+    if (monster.calm <= 0) monster.state = "asleep";
+  }
+  if (Math.hypot(player.x - monster.x, player.y - monster.y) < 34) { caught = true; $("say").textContent = "Got you. Move again in a moment to retry."; setTimeout(place, 1500); }
+  if (chests.every((x) => x.open)) { won = true; $("say").textContent = "All three open. You win. Did the mic feel fair?"; }
+}
+function draw(level) {
+  g.fillStyle = "#2a2a35"; g.fillRect(0, 0, 640, 400);
+  for (const ch of chests) {
+    g.fillStyle = ch.open ? "#cffb2d" : "#ffb02d"; g.fillRect(ch.x - 18, ch.y - 14, 36, 28);
+    if (!ch.open && ch.t > 0) { g.fillStyle = "#fff"; g.fillRect(ch.x - 18, ch.y - 24, 36 * ch.t / 1.5, 5); }
+  }
+  if (level) { g.strokeStyle = "#fff"; g.globalAlpha = .3; g.lineWidth = 3; g.beginPath(); g.arc(player.x, player.y, 24 + level * 22, 0, 7); g.stroke(); g.globalAlpha = 1; }
+  blob(monster.x, monster.y, 34, monster.state === "asleep" ? "#7a5cff" : "#ff4d6d", true, monster.state === "asleep");
+  blob(player.x, player.y, 18, "#ff8fb1");
+  if (!playing) { g.fillStyle = "#fff"; g.font = "16px system-ui"; g.textAlign = "center"; g.fillText("Choose mic or keys above", 320, 70); g.textAlign = "start"; }
+}
+requestAnimationFrame(frame);
+window.demo = { get level() { return Math.max(micLevel, keyLevel); }, get log() { return log; }, get triggers() { return triggers; }, get floor() { return loud.floor; }, get monster() { return monster; }, get chests() { return chests; }, get player() { return player; }, teleport(x, y) { player.x = x; player.y = y; } };
+</script></body></html>

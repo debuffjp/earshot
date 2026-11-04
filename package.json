@@ -1,8 +1,9 @@
 {
   "name": "earshot",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/debuffjp/earshot.git" },
+  "homepage": "https://github.com/debuffjp/earshot#readme",
   "description": "Sound that knows about walls and rooms, and mic loudness as game input, for 2D web games",
   "type": "module",
   "sideEffects": false,

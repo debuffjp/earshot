@@ -92,6 +92,7 @@ try {
   await none.keyboard.up(" ");
   assert.equal(await none.evaluate(() => window.demo.chests[0].open), true, "a hum key opens a chest");
   assert.equal(await none.evaluate(() => window.demo.monster.state), "asleep", "a hum doesn't wake it");
+  await none.evaluate(() => window.demo.teleport(90, 40));
   await none.keyboard.down("x");
   await sleep(300);
   assert.equal(await none.evaluate(() => window.demo.monster.state), "asleep", "a far shout behind the wall isn't heard");

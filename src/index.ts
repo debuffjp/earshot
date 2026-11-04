@@ -144,6 +144,18 @@ export interface Source {
   remove(): void;
 }
 
+export interface VoiceOptions extends SourceOptions {
+  /** Above this level, in dB, the voice counts as speaking. Defaults to -50. */
+  speakingDb?: number;
+}
+
+export interface Voice extends Source {
+  /** The voice's level before distance and walls, in dB. */
+  readonly levelDb: number;
+  /** For a talking indicator. Ignores distance and walls, so check `state` if range matters. */
+  readonly speaking: boolean;
+}
+
 export interface Listener {
   /** Live values: changes apply on the next update. */
   readonly params: Params;
@@ -151,6 +163,11 @@ export interface Listener {
   readonly reverbs: Record<string, Reverb>;
   /** Sends any audio node through distance, walls, pan and reverb. */
   source(input: AudioNode, options: SourceOptions): Source;
+  /**
+   * Sends a remote WebRTC stream through distance, walls, pan and reverb. Pass the
+   * stream from `ontrack`. Needs an AudioContext, not an OfflineAudioContext.
+   */
+  voice(stream: MediaStream, options: VoiceOptions): Voice;
   /** Call from your game loop. 10 to 20 times a second is enough. */
   update(): void;
   /** Removes every source and the reverbs. */
@@ -191,10 +208,43 @@ export function createListener(ctx: BaseAudioContext, options: ListenerOptions):
   const updates = new Set<(listener: Point) => void>();
   const removers = new Set<() => void>();
 
-  return {
+  const listener: Listener = {
     params,
     materials,
     reverbs,
+    voice(stream, options) {
+      if (!(ctx instanceof AudioContext)) throw new Error("earshot: voice() needs an AudioContext");
+      // Chrome reportedly keeps a remote stream silent in Web Audio unless an element also plays it.
+      // Muted rather than volume 0, which reportedly breaks echo cancellation.
+      const element = new Audio();
+      element.srcObject = stream;
+      element.muted = true;
+      void element.play().catch(() => {});
+      const input = ctx.createMediaStreamSource(stream);
+      const analyser = new AnalyserNode(ctx, { fftSize: 1024 });
+      input.connect(analyser);
+      const samples = new Float32Array(analyser.fftSize);
+      const speakingDb = options.speakingDb ?? -50;
+      const source = listener.source(input, options);
+      const levelDb = () => {
+        analyser.getFloatTimeDomainData(samples);
+        return rmsDb(samples);
+      };
+      return {
+        get state() { return source.state; },
+        get mix() { return source.mix; },
+        get reverb() { return source.reverb; },
+        get muted() { return source.muted; },
+        set muted(value) { source.muted = value; },
+        get levelDb() { return levelDb(); },
+        get speaking() { return levelDb() > speakingDb; },
+        remove() {
+          source.remove();
+          input.disconnect();
+          element.srcObject = null;
+        },
+      };
+    },
     source(input, { pos }) {
       const filter = new BiquadFilterNode(ctx, { type: "lowpass", frequency: OPEN_CUTOFF });
       const gain = new GainNode(ctx, { gain: 0 });
@@ -253,6 +303,77 @@ export function createListener(ctx: BaseAudioContext, options: ListenerOptions):
       for (const remove of [...removers]) remove();
       for (const node of buses.values()) node.disconnect();
       buses.clear();
+    },
+  };
+  return listener;
+}
+
+function rmsDb(samples: Float32Array): number {
+  let sum = 0;
+  for (const s of samples) sum += s * s;
+  return 10 * Math.log10(sum / samples.length + 1e-12);
+}
+
+export interface VoiceMicOptions {
+  /**
+   * Required. Your game's check that this player may use voice, such as a parent's
+   * consent or a portal's disableChat flag. The mic won't open while this is false.
+   */
+  canUseVoice(): boolean;
+  /** Defaults to true. "all" also asks the browser to cancel other audio where it can. */
+  echoCancellation?: boolean | "all" | "remote-only";
+  /** Starts off. While on, the mic only sends during `talk(true)`. */
+  pushToTalk?: boolean;
+}
+
+export interface VoiceMic {
+  /** The stream to add to your connection. Null until `start` succeeds. */
+  readonly stream: MediaStream | null;
+  /** What the browser really applied. */
+  readonly applied: MediaTrackSettings | null;
+  /** True when audio is being sent. Show players this. */
+  readonly live: boolean;
+  muted: boolean;
+  pushToTalk: boolean;
+  /** Hold to talk, while `pushToTalk` is on. */
+  talk(held: boolean): void;
+  /** Never rejects. `error` is "not-allowed" when `canUseVoice` says no. */
+  start(): Promise<MicResult>;
+  stop(): void;
+}
+
+/** The player's own mic for voice chat. Off until the game asks, and it records nothing. */
+export function createVoiceMic(options: VoiceMicOptions): VoiceMic {
+  let stream: MediaStream | null = null;
+  let muted = false;
+  let pushToTalk = options.pushToTalk ?? false;
+  let held = false;
+  const sending = () => !muted && (!pushToTalk || held);
+  const apply = () => stream?.getAudioTracks().forEach((track) => { track.enabled = sending(); });
+  return {
+    get stream() { return stream; },
+    get applied() { return stream?.getAudioTracks()[0]?.getSettings() ?? null; },
+    get live() { return stream !== null && sending(); },
+    get muted() { return muted; },
+    set muted(value) { muted = value; apply(); },
+    get pushToTalk() { return pushToTalk; },
+    set pushToTalk(value) { pushToTalk = value; apply(); },
+    talk(value) { held = value; apply(); },
+    async start() {
+      if (stream) return { ok: true };
+      if (!options.canUseVoice()) return { ok: false, error: "not-allowed" };
+      try {
+        const echoCancellation = (options.echoCancellation ?? true) as boolean;
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation, noiseSuppression: true, autoGainControl: true } });
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.name : "unavailable" };
+      }
+      apply();
+      return { ok: true };
+    },
+    stop() {
+      stream?.getTracks().forEach((track) => track.stop());
+      stream = null;
     },
   };
 }

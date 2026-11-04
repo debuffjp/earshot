@@ -16,7 +16,7 @@ pre{font:12px ui-monospace,monospace;background:#22222b;padding:8px;border-radiu
 <canvas id="c" width="768" height="448"></canvas>
 <pre id="info">Your voice goes directly to the other device on this network. Nothing is recorded.</pre>
 </main><script type="module">
-import { createListener, wallsOnGrid } from "/dist/index.js";
+import { createListener, createVoiceMic, wallsOnGrid } from "/dist/index.js";
 const $ = (id) => document.getElementById(id);
 const W = 24, H = 14, T = 32;
 const tiles = Array.from({ length: H }, () => Array(W).fill(null));
@@ -31,14 +31,14 @@ const fill = { null: "#2a2a35", room: "#2f3a4a", cave: "#3a2f4a" };
 
 const id = crypto.randomUUID();
 const me = { x: 5.5, y: 5.5 }, them = { x: 14.5, y: 5 };
-let ctx, ear, voice, pc, channel, stream, muted = false, ptt = false, talking = false, walls = true, bypassed = false;
-let remoteLevel = 0, remoteAnalyser, pending = [];
+let ctx, ear, voice, pc, channel, mic, ptt = false, talking = false, walls = true, muted = false;
+let pending = [];
 const stats = { state: "not joined" };
 const post = (message) => fetch(`/signal?id=${id}`, { method: "POST", body: JSON.stringify(message) });
 
 function applyMic() {
-  const track = stream?.getAudioTracks()[0];
-  if (track) track.enabled = !muted && (!ptt || talking);
+  if (!mic) return;
+  mic.muted = muted; mic.pushToTalk = ptt; mic.talk(talking);
 }
 $("mute").onclick = (e) => { muted = !muted; e.target.textContent = muted ? "Muted" : "Mute"; e.target.className = muted ? "on" : ""; applyMic(); };
 $("ptt").onclick = (e) => { ptt = !ptt; e.target.textContent = `Push to talk: ${ptt ? "on (hold Space or the map's corner)" : "off"}`; e.target.className = ptt ? "on" : ""; applyMic(); };
@@ -48,18 +48,13 @@ addEventListener("keyup", (e) => { if (e.key === " ") { talking = false; applyMi
 
 function makePeer() {
   pc = new RTCPeerConnection();
-  stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+  mic.stream.getTracks().forEach((t) => pc.addTrack(t, mic.stream));
   pc.onicecandidate = (e) => { if (e.candidate) post({ type: "ice", candidate: e.candidate }); };
   pc.onconnectionstatechange = () => { stats.state = pc?.connectionState ?? "closed"; };
   pc.ondatachannel = (e) => useChannel(e.channel);
   pc.ontrack = (e) => {
-    // Chrome reportedly keeps a remote stream silent in Web Audio unless an element also plays it, muted.
-    const element = new Audio(); element.srcObject = e.streams[0]; element.muted = true; element.play().catch(() => {});
-    window.demo.element = element;
-    const node = ctx.createMediaStreamSource(e.streams[0]);
-    remoteAnalyser = new AnalyserNode(ctx, { fftSize: 1024 }); node.connect(remoteAnalyser);
     voice?.remove();
-    voice = ear.source(node, { pos: () => them });
+    voice = ear.voice(e.streams[0], { pos: () => them });
     window.demo.heard = true;
   };
 }
@@ -85,7 +80,7 @@ async function onSignal(m) {
   }
   if (m.type === "answer") { await pc.setRemoteDescription(m.sdp); await flushIce(); }
   if (m.type === "ice") { if (pc?.remoteDescription) await pc.addIceCandidate(m.candidate); else pending.push(m.candidate); }
-  if (m.type === "leave") { pc?.close(); pc = channel = null; voice?.remove(); voice = null; remoteAnalyser = null; stats.state = "the other device left"; }
+  if (m.type === "leave") { pc?.close(); pc = channel = null; voice?.remove(); voice = null; stats.state = "the other device left"; }
 }
 $("join").onclick = async () => {
   $("join").disabled = true; $("ec").disabled = true; $("join").className = "";
@@ -94,10 +89,10 @@ $("join").onclick = async () => {
   document.addEventListener("pointerdown", () => { if (ctx.state !== "running") ctx.resume(); });
   ear = createListener(ctx, { pos: () => me, world: { wallsBetween: (a, b) => (walls ? wallsOnGrid(tiles, a, b) : []), reverbAt: (p) => roomAt(p) } });
   const v = $("ec").value;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: v === "all" ? "all" : v === "on", noiseSuppression: v !== "off", autoGainControl: v !== "off" } });
-  } catch (e) { stats.state = `mic unavailable: ${e.name}`; return; }
-  stats.applied = stream.getAudioTracks()[0].getSettings();
+  mic = createVoiceMic({ canUseVoice: () => true, echoCancellation: v === "all" ? "all" : v === "on" });
+  const started = await mic.start();
+  if (!started.ok) { stats.state = `mic unavailable: ${started.error}`; return; }
+  stats.applied = mic.applied;
   applyMic();
   new EventSource(`/signal?id=${id}`).onmessage = (e) => onSignal(JSON.parse(e.data));
 };
@@ -124,7 +119,6 @@ function blob(s, col, ring) {
   g.fillStyle = "#16161d";
   for (const o of [-5, 5]) { g.beginPath(); g.arc(s.x * T + o, s.y * T - 1, 2.2, 0, 7); g.fill(); }
 }
-const samples = new Float32Array(1024);
 let lastSend = 0;
 function frame(now) {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -132,8 +126,7 @@ function frame(now) {
     if (tiles[y][x]) { g.fillStyle = tiles[y][x] === "thin" ? "#8795a8" : "#e8e8ef"; g.fillRect(x * T, y * T, T, T); }
   }
   if (ptt) { g.fillStyle = talking ? "#cffb2d" : "#ffffff33"; g.fillRect(W * T * .85, H * T * .75, W * T * .15, H * T * .25); g.fillStyle = talking ? "#16161d" : "#fff"; g.font = "bold 16px system-ui"; g.fillText("hold to talk", W * T * .86, H * T * .88); }
-  if (remoteAnalyser) { remoteAnalyser.getFloatTimeDomainData(samples); let s = 0; for (const v of samples) s += v * v; remoteLevel = Math.min(1, Math.sqrt(s / samples.length) * 8); }
-  blob(them, "#cffb2d", remoteLevel > .05 ? remoteLevel : 0); blob(me, "#ff8fb1", 0);
+  blob(them, "#cffb2d", voice?.speaking ? Math.min(1, (voice.levelDb + 50) / 30) : 0); blob(me, "#ff8fb1", 0);
   if (ear) {
     ear.update();
     if (channel?.readyState === "open" && now - lastSend > 66) { channel.send(JSON.stringify({ x: me.x, y: me.y })); lastSend = now; }
@@ -150,5 +143,5 @@ setInterval(async () => {
   stats.voice = voice?.state; stats.walls = voice?.mix?.walls.join("+") || (voice ? "none" : undefined); stats.gain = voice?.mix?.gain.toFixed(2);
   $("info").textContent = `Your voice goes directly to the other device on this network. Nothing is recorded.\n${Object.entries(stats).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join("\n")}`;
 }, 1000);
-window.demo = { stats, me, them, get voice() { return voice; }, get level() { return remoteLevel; } };
+window.demo = { stats, me, them, get voice() { return voice; }, get mic() { return mic; }, get level() { return voice?.levelDb ?? -120; } };
 </script></body></html>

@@ -25,7 +25,7 @@ try {
   const before = await read(a);
   console.log("a", before);
   assert.ok(before.packets > 50, "audio packets arrive");
-  assert.ok(before.level > 0, "remote audio reaches Web Audio");
+  assert.ok(before.level > -80, "remote audio reaches Web Audio");
   assert.deepEqual(before.mix.walls, ["thin"], "the first seat hears the second through the thin wall");
 
   await b.evaluate(() => { window.demo.me.x = 12; window.demo.me.y = 10; });
@@ -36,7 +36,20 @@ try {
 
   await a.click("#mute");
   await sleep(300);
-  assert.equal(await a.evaluate(() => document.querySelector("#mute").textContent), "Muted");
+  assert.equal(await a.evaluate(() => window.demo.mic.stream.getAudioTracks()[0].enabled), false, "mute stops the track");
+  assert.equal(await a.evaluate(() => window.demo.mic.live), false);
+  await a.click("#mute");
+  await a.click("#ptt");
+  assert.equal(await a.evaluate(() => window.demo.mic.live), false, "push to talk sends nothing until held");
+  await a.keyboard.down(" ");
+  assert.equal(await a.evaluate(() => window.demo.mic.live), true, "holding sends");
+  await a.keyboard.up(" ");
+  const refused = await a.evaluate(async () => {
+    const { createVoiceMic } = await import("/dist/index.js");
+    const m = createVoiceMic({ canUseVoice: () => false });
+    return { result: await m.start(), stream: m.stream };
+  });
+  assert.deepEqual(refused, { result: { ok: false, error: "not-allowed" }, stream: null }, "the game can refuse voice");
 
   const third = await open();
   await third.waitForFunction(() => window.demo.stats.state.startsWith("room full"));

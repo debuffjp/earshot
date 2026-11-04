@@ -80,7 +80,37 @@ Always give players a key or button through `press()`. Don't require words or lo
 - Browsers can ignore constraints. Read `loud.applied` for what you got.
 - Opening the mic can change game audio on iPhones. [WebKit bug 311451](https://bugs.webkit.org/show_bug.cgi?id=311451) reports lower quality and mono output on iOS 26.4 and later. Test on a real phone.
 - Tested on a desktop browser and one iPhone. Android is untested.
+- Earshot has no networking or servers.
 - Pan uses horizontal position only, which suits top-down and side-on games.
+
+## Voice chat
+
+Added in 0.2. Earshot makes voices sound like they're in your world. You bring the connection: any `RTCPeerConnection`, from your own code or a library. Earshot runs no servers and sends nothing itself.
+
+```ts
+import { createListener, createVoiceMic } from "@debuffjp/earshot";
+
+const mic = createVoiceMic({ canUseVoice: () => settings.voiceAllowed });
+const { ok, error } = await mic.start(); // Call from a tap or key press.
+if (ok) mic.stream.getTracks().forEach((track) => connection.addTrack(track, mic.stream));
+
+connection.ontrack = (event) => {
+  const voice = ear.voice(event.streams[0], { pos: () => friend });
+  // voice.state, voice.speaking and voice.levelDb are there for your UI.
+};
+
+mic.muted = true;
+mic.pushToTalk = true;
+mic.talk(true);
+```
+
+A voice goes through the same walls, rooms and pan as any other source, and `voice.muted` mutes one player locally. `mic.live` says whether audio is being sent, so show it to players. `canUseVoice` is required, and the mic won't open while it returns false: use it for consent checks and flags such as a portal's `disableChat`.
+
+If you connect players directly, each one's IP address is visible to the others. Relaying through your own TURN server with `iceTransportPolicy: "relay"` hides it from them, at the cost of bandwidth.
+
+**These controls don't make your game compliant.** Live voice between players can bring legal duties, especially where children may play: COPPA in the US and the Online Safety Act in the UK, for example. A library in the browser can't verify ages, enforce bans, moderate or take reports, so those are yours to plan for. Keep voice off by default and limit it to friends. This isn't legal advice.
+
+Tested with two devices on one network: a PC and an iPhone. Larger groups and connections over the internet are untested.
 
 ## With debuff
 

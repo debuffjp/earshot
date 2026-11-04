@@ -1,6 +1,6 @@
 # Earshot
 
-Sound that knows about walls and rooms, and mic loudness as game input, for 2D web games. No runtime dependencies, about 3.7 KB gzipped before minifying, and any engine that can give it a Web Audio context.
+Spatial audio for 2D web games: sound that knows about walls and rooms, plus mic loudness as game input. No runtime dependencies, about 3.7 KB gzipped before minifying, and any engine that can give it a Web Audio context.
 
 ```bash
 npm i @debuffjp/earshot

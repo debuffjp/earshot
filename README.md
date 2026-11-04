@@ -3,13 +3,13 @@
 Sound that knows about walls and rooms, and mic loudness as game input, for 2D web games. No runtime dependencies, about 3.7 KB gzipped before minifying, and any engine that can give it a Web Audio context.
 
 ```bash
-npm i earshot
+npm i @debuffjp/earshot
 ```
 
 ## Sound through walls
 
 ```ts
-import { createListener, wallsOnGrid } from "earshot";
+import { createListener, wallsOnGrid } from "@debuffjp/earshot";
 
 const ctx = new AudioContext(); // Resume it from a tap or key press.
 const ear = createListener(ctx, {
@@ -46,7 +46,7 @@ Each reverb is shared by every source in it, because convolvers are expensive.
 ## Loudness as input
 
 ```ts
-import { createLoudness } from "earshot";
+import { createLoudness } from "@debuffjp/earshot";
 
 const loud = createLoudness(ctx);
 loud.onLevel((level) => { if (level >= 2) monster.hear(player); }); // 0 to 3
@@ -62,7 +62,7 @@ loud.press(0);
 To make walls and distance matter, check what the noise sounds like where the monster is. The threshold is yours to tune; 6 dB felt right in the Wake It demo.
 
 ```ts
-import { computeMix, heardDb, wallsOnGrid, DEFAULT_MATERIALS, DEFAULT_PARAMS } from "earshot";
+import { computeMix, heardDb, wallsOnGrid, DEFAULT_MATERIALS, DEFAULT_PARAMS } from "@debuffjp/earshot";
 
 const walls = wallsOnGrid(tiles, player, monster); // Both in tile units.
 const mix = computeMix(player, monster, walls, DEFAULT_PARAMS, DEFAULT_MATERIALS);

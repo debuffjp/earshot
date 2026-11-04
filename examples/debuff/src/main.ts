@@ -1,7 +1,7 @@
 import { Audio } from "@debuffjp/audio";
 import { Game } from "@debuffjp/core";
 import { Input } from "@debuffjp/input";
-import { createListener, wallsOnGrid } from "earshot";
+import { createListener, wallsOnGrid } from "@debuffjp/earshot";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game");
 if (!canvas) throw new Error('Missing <canvas id="game">');

@@ -7,7 +7,7 @@
     "@debuffjp/audio": "0.29.0",
     "@debuffjp/core": "0.29.0",
     "@debuffjp/input": "0.29.0",
-    "earshot": "file:../.."
+    "@debuffjp/earshot": "file:../.."
   },
   "devDependencies": { "@debuffjp/cli": "0.29.0", "typescript": "^5.6.0" }
 }

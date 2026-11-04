@@ -11,12 +11,12 @@ button.on{background:#cffb2d;color:#16161d}
 pre{font:12px ui-monospace,monospace;background:#22222b;padding:8px;border-radius:8px;white-space:pre-wrap;margin:0}
 </style></head><body><main>
 <h1>Two Tabs Apart</h1>
-<p id="say">Open this page on two devices on the same Wi-Fi, in different rooms or with headphones, and press Join on both. Drag to move.</p>
-<div><select id="ec"><option value="all">Echo cancel: all</option><option value="on" selected>Echo cancel: on</option><option value="off">Echo cancel: off</option></select><button id="join" class="on">Join</button><button id="mute">Mute</button><button id="ptt">Push to talk: off</button><button id="walls" class="on">Walls: on</button></div>
+<p id="say">Add ?server=wss://your-worker to this address, press Join, then send the link it makes to a friend. Drag to move.</p>
+<div><select id="ec"><option value="all">Echo cancel: all</option><option value="on" selected>Echo cancel: on</option><option value="off">Echo cancel: off</option></select><select id="policy"><option value="direct">Connect: direct (shares IP)</option><option value="relay">Connect: relay only</option></select><button id="join" class="on">Join</button><button id="mute">Mute</button><button id="ptt">Push to talk: off</button><button id="walls" class="on">Walls: on</button></div>
 <canvas id="c" width="768" height="448"></canvas>
 <pre id="info">Your voice goes directly to the other device on this network. Nothing is recorded.</pre>
 </main><script type="module">
-import { createListener, createVoiceMic, wallsOnGrid } from "/dist/index.js";
+import { createListener, createRoomCode, createVoiceMic, joinVoiceRoom, wallsOnGrid } from "/dist/index.js";
 const $ = (id) => document.getElementById(id);
 const W = 24, H = 14, T = 32;
 const tiles = Array.from({ length: H }, () => Array(W).fill(null));
@@ -29,12 +29,12 @@ tiles[3][10] = null;
 const roomAt = (s) => (s.x < 10 ? null : s.y >= 8 ? "cave" : "room");
 const fill = { null: "#2a2a35", room: "#2f3a4a", cave: "#3a2f4a" };
 
-const id = crypto.randomUUID();
-const me = { x: 5.5, y: 5.5 }, them = { x: 14.5, y: 5 };
-let ctx, ear, voice, pc, channel, mic, ptt = false, talking = false, walls = true, muted = false;
-let pending = [];
+const params = new URLSearchParams(location.search);
+const server = params.get("server") ?? "ws://localhost:8787";
+const me = { x: 5.5, y: 5.5 };
+const others = new Map();
+let ctx, ear, room, mic, ptt = false, talking = false, walls = true, muted = false;
 const stats = { state: "not joined" };
-const post = (message) => fetch(`/signal?id=${id}`, { method: "POST", body: JSON.stringify(message) });
 
 function applyMic() {
   if (!mic) return;
@@ -46,44 +46,8 @@ $("walls").onclick = (e) => { walls = !walls; e.target.textContent = `Walls: ${w
 addEventListener("keydown", (e) => { if (e.key === " ") { e.preventDefault(); talking = true; applyMic(); } });
 addEventListener("keyup", (e) => { if (e.key === " ") { talking = false; applyMic(); } });
 
-function makePeer() {
-  pc = new RTCPeerConnection();
-  mic.stream.getTracks().forEach((t) => pc.addTrack(t, mic.stream));
-  pc.onicecandidate = (e) => { if (e.candidate) post({ type: "ice", candidate: e.candidate }); };
-  pc.onconnectionstatechange = () => { stats.state = pc?.connectionState ?? "closed"; };
-  pc.ondatachannel = (e) => useChannel(e.channel);
-  pc.ontrack = (e) => {
-    voice?.remove();
-    voice = ear.voice(e.streams[0], { pos: () => them });
-    window.demo.heard = true;
-  };
-}
-function useChannel(c) {
-  channel = c;
-  c.onmessage = (e) => { const p = JSON.parse(e.data); them.x = p.x; them.y = p.y; window.demo.gotPosition = true; };
-}
-async function flushIce() { for (const c of pending) await pc.addIceCandidate(c); pending = []; }
-async function onSignal(m) {
-  if (m.type === "full") stats.state = "room full: two players at most";
-  if (m.type === "welcome" && m.seat === 1) { me.x = 14.5; me.y = 5; them.x = 5.5; them.y = 5.5; }
-  if (m.type === "welcome") stats.state = m.seat === 0 ? "waiting for the other device" : "connecting";
-  if (m.type === "join") {
-    makePeer(); useChannel(pc.createDataChannel("pos", { ordered: false, maxRetransmits: 0 }));
-    await pc.setLocalDescription(await pc.createOffer());
-    post({ type: "offer", sdp: pc.localDescription });
-  }
-  if (m.type === "offer") {
-    makePeer();
-    await pc.setRemoteDescription(m.sdp); await flushIce();
-    await pc.setLocalDescription(await pc.createAnswer());
-    post({ type: "answer", sdp: pc.localDescription });
-  }
-  if (m.type === "answer") { await pc.setRemoteDescription(m.sdp); await flushIce(); }
-  if (m.type === "ice") { if (pc?.remoteDescription) await pc.addIceCandidate(m.candidate); else pending.push(m.candidate); }
-  if (m.type === "leave") { pc?.close(); pc = channel = null; voice?.remove(); voice = null; stats.state = "the other device left"; }
-}
 $("join").onclick = async () => {
-  $("join").disabled = true; $("ec").disabled = true; $("join").className = "";
+  $("join").disabled = $("ec").disabled = $("policy").disabled = true; $("join").className = "";
   ctx = new AudioContext();
   await ctx.resume();
   document.addEventListener("pointerdown", () => { if (ctx.state !== "running") ctx.resume(); });
@@ -94,7 +58,18 @@ $("join").onclick = async () => {
   if (!started.ok) { stats.state = `mic unavailable: ${started.error}`; return; }
   stats.applied = mic.applied;
   applyMic();
-  new EventSource(`/signal?id=${id}`).onmessage = (e) => onSignal(JSON.parse(e.data));
+  const code = params.get("code") ?? createRoomCode();
+  const joined = await joinVoiceRoom({
+    url: server, code, mic, listener: ear, ipPolicy: $("policy").value,
+    pos: (peer) => others.get(peer) ?? { x: 14.5, y: 5 },
+    onPeer: (peer) => { if (!others.has(peer)) others.set(peer, { x: 14.5, y: 5 }); window.demo.heard = true; },
+    onLeave: (peer) => { others.delete(peer); },
+    onMessage: (peer, p) => { others.set(peer, p); window.demo.gotPosition = true; },
+  });
+  if (!joined.ok) { stats.state = `couldn't join: ${joined.error}`; return; }
+  room = joined.room;
+  stats.state = "in the room";
+  stats.invite = `${location.origin}${location.pathname}?server=${encodeURIComponent(server)}&code=${code}`;
 };
 
 const c = $("c"), g = c.getContext("2d");
@@ -126,22 +101,22 @@ function frame(now) {
     if (tiles[y][x]) { g.fillStyle = tiles[y][x] === "thin" ? "#8795a8" : "#e8e8ef"; g.fillRect(x * T, y * T, T, T); }
   }
   if (ptt) { g.fillStyle = talking ? "#cffb2d" : "#ffffff33"; g.fillRect(W * T * .85, H * T * .75, W * T * .15, H * T * .25); g.fillStyle = talking ? "#16161d" : "#fff"; g.font = "bold 16px system-ui"; g.fillText("hold to talk", W * T * .86, H * T * .88); }
-  blob(them, "#cffb2d", voice?.speaking ? Math.min(1, (voice.levelDb + 50) / 30) : 0); blob(me, "#ff8fb1", 0);
+  for (const [peer, p] of others) {
+    const voice = room?.peers.get(peer);
+    blob(p, "#cffb2d", voice?.speaking ? Math.min(1, (voice.levelDb + 50) / 30) : 0);
+  }
+  blob(me, "#ff8fb1", 0);
   if (ear) {
     ear.update();
-    if (channel?.readyState === "open" && now - lastSend > 66) { channel.send(JSON.stringify({ x: me.x, y: me.y })); lastSend = now; }
+    if (room && now - lastSend > 66) { room.send({ x: me.x, y: me.y }); lastSend = now; }
   }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 
-setInterval(async () => {
-  if (pc) for (const r of (await pc.getStats()).values()) {
-    if (r.type === "candidate-pair" && r.nominated) { stats.rttMs = Math.round((r.currentRoundTripTime ?? 0) * 1000); }
-    if (r.type === "inbound-rtp" && r.kind === "audio") { stats.packets = r.packetsReceived; stats.lost = r.packetsLost; stats.jitterMs = Math.round((r.jitter ?? 0) * 1000); }
-  }
-  stats.voice = voice?.state; stats.walls = voice?.mix?.walls.join("+") || (voice ? "none" : undefined); stats.gain = voice?.mix?.gain.toFixed(2);
-  $("info").textContent = `Your voice goes directly to the other device on this network. Nothing is recorded.\n${Object.entries(stats).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join("\n")}`;
+setInterval(() => {
+  stats.players = room ? [...room.peers.entries()].map(([p, voice]) => `${room.connection(p)}, ${voice.state}, walls: ${voice.mix?.walls.join("+") || "none"}`) : [];
+  $("info").textContent = `Your voice goes to the other players' devices, directly or through a relay. Nothing is recorded.\n${Object.entries(stats).map(([k, val]) => `${k}: ${typeof val === "object" ? JSON.stringify(val) : val}`).join("\n")}`;
 }, 1000);
-window.demo = { stats, me, them, get voice() { return voice; }, get mic() { return mic; }, get level() { return voice?.levelDb ?? -120; } };
+window.demo = { stats, me, others, get room() { return room; }, get mic() { return mic; } };
 </script></body></html>

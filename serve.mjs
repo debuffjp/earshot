@@ -6,12 +6,10 @@ import { networkInterfaces } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode-generator";
-import { handleSignal } from "./signal.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const types = { ".html": "text/html", ".js": "text/javascript", ".wav": "audio/wav" };
 const handler = (req, res) => {
-  if (handleSignal(req, res)) return;
   const path = new URL(req.url, "http://x").pathname;
   const base = path.startsWith("/dist/") ? root : join(root, "public");
   const file = join(base, normalize(path === "/" ? "index.html" : path));

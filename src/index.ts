@@ -564,3 +564,6 @@ export function createLoudness(ctx: AudioContext, options: LoudnessOptions = {})
     },
   };
 }
+
+export { createRoomCode, joinVoiceRoom } from "./room.js";
+export type { JoinResult, VoiceRoom, VoiceRoomOptions } from "./room.js";

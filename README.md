@@ -80,12 +80,12 @@ Always give players a key or button through `press()`. Don't require words or lo
 - Browsers can ignore constraints. Read `loud.applied` for what you got.
 - Opening the mic can change game audio on iPhones. [WebKit bug 311451](https://bugs.webkit.org/show_bug.cgi?id=311451) reports lower quality and mono output on iOS 26.4 and later. Test on a real phone.
 - Tested on a desktop browser and one iPhone. Android is untested.
-- Earshot has no networking or servers.
+- We host nothing: voice rooms run on your own Worker.
 - Pan uses horizontal position only, which suits top-down and side-on games.
 
 ## Voice chat
 
-Added in 0.2. Earshot makes voices sound like they're in your world. You bring the connection: any `RTCPeerConnection`, from your own code or a library. Earshot runs no servers and sends nothing itself.
+Added in 0.2. Earshot makes voices sound like they're in your world. Use any `RTCPeerConnection` you already have, or the voice rooms below. We run no servers for you.
 
 ```ts
 import { createListener, createVoiceMic } from "@debuffjp/earshot";
@@ -106,7 +106,30 @@ mic.talk(true);
 
 A voice goes through the same walls, rooms and pan as any other source, and `voice.muted` mutes one player locally. `mic.live` says whether audio is being sent, so show it to players. `canUseVoice` is required, and the mic won't open while it returns false: use it for consent checks and flags such as a portal's `disableChat`.
 
-If you connect players directly, each one's IP address is visible to the others. Relaying through your own TURN server with `iceTransportPolicy: "relay"` hides it from them, at the cost of bandwidth.
+### Voice rooms
+
+If you don't have a connection already, `joinVoiceRoom()` connects players using a small Cloudflare Worker that [you deploy to your own account](https://github.com/debuffjp/earshot/tree/main/templates/worker). We don't host it. It gives you invite-only rooms, a player cap and short-lived TURN credentials, and its `canJoin` function is where your login or ban checks go.
+
+```ts
+import { createRoomCode, joinVoiceRoom } from "@debuffjp/earshot";
+
+const code = createRoomCode(); // Share it with friends.
+const joined = await joinVoiceRoom({
+  url: "wss://earshot-voice.you.workers.dev",
+  code,
+  mic,
+  listener: ear,
+  ipPolicy: "relay", // Or "direct": see below.
+  pos: (peer) => players.get(peer),
+  onMessage: (peer, position) => players.set(peer, position),
+});
+
+if (joined.ok) setInterval(() => joined.room.send(player), 66);
+```
+
+`ipPolicy` is required because it's a privacy decision. `"relay"` hides IP addresses from other players and fails rather than falling back, but all voice is billed as TURN traffic. `"direct"` costs less, and players can see each other's IP addresses.
+
+Everyone connects to everyone, so upload grows with each player. Rooms stop sending to players well out of range. Errors come back as `joined.error`: `room-full`, `no-turn-server`, `mic-not-started` or `connection-failed`. Dropped connections don't rejoin on their own yet, and `room.connection(peer)` lets you show that.
 
 **These controls don't make your game compliant.** Live voice between players can bring legal duties, especially where children may play: COPPA in the US and the Online Safety Act in the UK, for example. A library in the browser can't verify ages, enforce bans, moderate or take reports, so those are yours to plan for. Keep voice off by default and limit it to friends. This isn't legal advice.
 

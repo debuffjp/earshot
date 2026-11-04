@@ -3,3 +3,5 @@ node_modules/
 test/out/
 dist/
 .debuff/
+.wrangler/
+.dev.vars

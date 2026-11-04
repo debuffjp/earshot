@@ -31,7 +31,7 @@ try {
   const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
   const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
   const errors = []; page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto("http://localhost:4710/wall.html");
+  await page.goto("http://localhost:4710/wall.html?noise");
   await page.click("#go");
   await page.waitForFunction(() => window.demo.ready);
   const spots = { clear: [8.5, 7.5], thin: [12.5, 5.5], solid: [12.5, 9.5], multi: [17.5, 1.5], silent: [23.5, 13.5] };

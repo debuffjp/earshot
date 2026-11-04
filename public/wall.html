@@ -20,47 +20,66 @@ button.off{background:#34343f;color:#eee}
 <div id="panel"><button id="go">Start sound</button><button id="bypass" class="off">Bypass walls</button><button id="who" class="off">Move me</button>
 <div id="read">press Start sound</div><div id="sliders"></div><button id="reset" class="off">Reset numbers</button></div></div>
 </main><script type="module">
-import { DEFAULTS, mix, createBuses, createVoice, wetGain } from "./earshot.js";
+import { createListener, wallsOnGrid } from "/dist/index.js";
 const W = 24, H = 14, T = 32;
-const tiles = Array.from({ length: H }, () => Array(W).fill(0));
-for (let y = 0; y < 7; y++) tiles[y][10] = 1;
-for (let y = 7; y < H; y++) tiles[y][10] = 2;
-for (let x = 11; x < W; x++) tiles[7][x] = 2;
-for (let y = 0; y < 4; y++) tiles[y][15] = 2;
-for (let x = 15; x < W; x++) tiles[3][x] = 2;
-tiles[3][10] = 0; // A doorway, so sound can be clear between hall and room.
+const tiles = Array.from({ length: H }, () => Array(W).fill(null));
+for (let y = 0; y < 7; y++) tiles[y][10] = "thin";
+for (let y = 7; y < H; y++) tiles[y][10] = "solid";
+for (let x = 11; x < W; x++) tiles[7][x] = "solid";
+for (let y = 0; y < 4; y++) tiles[y][15] = "solid";
+for (let x = 15; x < W; x++) tiles[3][x] = "solid";
+tiles[3][10] = null; // A doorway, so sound can be clear between hall and room.
 const roomAt = (s) => (s.x < 10 ? null : s.y >= 8 ? "cave" : "room");
 const fill = { null: "#2a2a35", room: "#2f3a4a", cave: "#3a2f4a" };
 
-const p = { ...DEFAULTS };
 const listener = { x: 8.5, y: 5.5 }, source = { x: 14.5, y: 4.5 };
-let ctx, voice, analyser, bypass = false, moveMe = false, last;
+let bypass = false, moveMe = false, started = false;
 const $ = (id) => document.getElementById(id);
-
-const ranges = { fullRadius:[0,8,.5], silentRadius:[4,24,.5], panWidth:[0,1,.05], panRange:[2,16,1], thinHz:[300,6000,50], thinDb:[-30,0,1], solidHz:[300,6000,50], solidDb:[-30,0,1], multiHz:[200,3000,50], multiDb:[-40,0,1], roomWetDb:[-40,0,1], caveWetDb:[-40,0,1] };
+const ctx = new AudioContext();
+const analyser = new AnalyserNode(ctx, { fftSize: 4096, smoothingTimeConstant: 0.9 });
+analyser.connect(ctx.destination);
+const ear = createListener(ctx, {
+  output: analyser,
+  pos: () => listener,
+  world: {
+    wallsBetween: (a, b) => (bypass ? [] : wallsOnGrid(tiles, a, b)),
+    reverbAt: (s) => roomAt(s),
+  },
+});
+const input = new GainNode(ctx);
+const speech = ear.source(input, { pos: () => source });
+const { params: pr, materials: ma, reverbs: re } = ear;
+const controls = [
+  ["fullRadius", pr, "fullRadius", 0, 8, .5], ["silentRadius", pr, "silentRadius", 4, 24, .5],
+  ["panWidth", pr, "panWidth", 0, 1, .05], ["panRange", pr, "panRange", 2, 16, 1],
+  ["thin Hz", ma.thin, "hz", 300, 6000, 50], ["thin dB", ma.thin, "db", -30, 0, 1],
+  ["solid Hz", ma.solid, "hz", 300, 6000, 50], ["solid dB", ma.solid, "db", -30, 0, 1],
+  ["2+ walls Hz", pr.multiWall, "hz", 200, 3000, 50], ["2+ walls dB", pr.multiWall, "db", -40, 0, 1],
+  ["room wet dB", re.room, "wetDb", -40, 0, 1], ["cave wet dB", re.cave, "wetDb", -40, 0, 1],
+];
+const initial = controls.map(([, o, k]) => o[k]);
 function sliders() {
-  $("sliders").replaceChildren(...Object.entries(ranges).map(([k, [min, max, step]]) => {
+  $("sliders").replaceChildren(...controls.map(([name, obj, k, min, max, step]) => {
     const l = document.createElement("label");
-    const i = Object.assign(document.createElement("input"), { type: "range", min, max, step, value: p[k] });
-    const o = document.createElement("span"); o.textContent = p[k];
-    i.oninput = () => { p[k] = +i.value; o.textContent = i.value; };
-    l.append(k, i, o); return l;
+    const i = Object.assign(document.createElement("input"), { type: "range", min, max, step, value: obj[k] });
+    const o = document.createElement("span"); o.textContent = obj[k];
+    i.oninput = () => { obj[k] = +i.value; o.textContent = i.value; };
+    l.append(name, i, o); return l;
   }));
 }
 sliders();
-$("reset").onclick = () => { Object.assign(p, DEFAULTS); sliders(); };
+$("reset").onclick = () => { controls.forEach(([, o, k], n) => { o[k] = initial[n]; }); sliders(); };
 $("bypass").onclick = (e) => { bypass = !bypass; e.target.className = bypass ? "" : "off"; };
 $("who").onclick = (e) => { moveMe = !moveMe; e.target.className = moveMe ? "" : "off"; };
 
 $("go").onclick = async () => {
-  if (ctx) { if (ctx.state === "running") await ctx.suspend(); else await ctx.resume(); $("go").textContent = ctx.state === "running" ? "Pause" : "Start sound"; return; }
-  ctx = new AudioContext();
+  if (started) { if (ctx.state === "running") await ctx.suspend(); else await ctx.resume(); $("go").textContent = ctx.state === "running" ? "Pause" : "Start sound"; return; }
+  started = true;
+  await ctx.resume();
   $("go").textContent = "Pause";
   const data = await (await fetch("speech.wav")).arrayBuffer();
   const src = new AudioBufferSourceNode(ctx, { buffer: await ctx.decodeAudioData(data), loop: true });
-  analyser = new AnalyserNode(ctx, { fftSize: 4096, smoothingTimeConstant: 0.9 });
-  analyser.connect(ctx.destination);
-  voice = createVoice(ctx, src, createBuses(ctx, analyser), analyser);
+  src.connect(input);
   src.start();
   window.demo.ready = true;
 };
@@ -88,26 +107,26 @@ function blob(s, col) {
   g.fillStyle = "#16161d";
   for (const o of [-5, 5]) { g.beginPath(); g.arc(s.x * T + o, s.y * T - 1, 2.2, 0, 7); g.fill(); }
 }
+let last;
 function frame() {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     g.fillStyle = fill[roomAt({ x, y: y })] ;
     g.fillRect(x * T, y * T, T, T);
-    if (tiles[y][x]) { g.fillStyle = tiles[y][x] === 1 ? "#8795a8" : "#e8e8ef"; g.fillRect(x * T, y * T, T, T); }
+    if (tiles[y][x]) { g.fillStyle = tiles[y][x] === "thin" ? "#8795a8" : "#e8e8ef"; g.fillRect(x * T, y * T, T, T); }
   }
   g.font = "bold 14px system-ui"; g.fillStyle = "#ffffff99";
   g.fillText("HALL (no reverb)", 12, 22); g.fillText("ROOM", 372, 22); g.fillText("CLOSET: 2 walls", 520, 22); g.fillText("CAVE", 372, 290);
   g.fillText("thin", 290, 150); g.fillText("solid", 285, 400);
   g.strokeStyle = "#ffffff"; g.globalAlpha = .12; g.lineWidth = 2;
-  for (const r of [p.fullRadius, p.silentRadius]) { g.beginPath(); g.arc(listener.x * T, listener.y * T, r * T, 0, 7); g.stroke(); }
+  for (const r of [pr.fullRadius, pr.silentRadius]) { g.beginPath(); g.arc(listener.x * T, listener.y * T, r * T, 0, 7); g.stroke(); }
   g.globalAlpha = 1;
   blob(listener, "#ff8fb1"); blob(source, "#cffb2d");
 
-  const m = mix(listener, source, tiles, p);
-  if (bypass) { m.gain = m.distanceGain; m.cutoff = 20000; m.label = "bypassed"; }
-  const room = roomAt(source);
-  last = { ...m, room };
-  $("read").textContent = `${m.label}  room: ${room ?? "hall"}\ndistance ${m.distance.toFixed(1)} tiles\ngain ${(20 * Math.log10(m.gain + 1e-5)).toFixed(0)} dB  cutoff ${m.cutoff} Hz\npan ${m.pan.toFixed(2)}`;
-  voice?.apply(m, room, wetGain(room, p) * (m.gain > 0 ? 1 : 0), p.smoothing);
+  ear.update();
+  const m = speech.mix, room = speech.reverb;
+  const label = bypass ? "bypassed" : m.walls.length === 0 ? "clear" : m.walls.length > 1 ? `${m.walls.length} walls` : `${m.walls[0]} wall`;
+  last = { ...m, room, label };
+  $("read").textContent = `${label}  room: ${room ?? "hall"}  (${speech.state})\ndistance ${m.distance.toFixed(1)} tiles\ngain ${(20 * Math.log10(m.gain + 1e-5)).toFixed(0)} dB  cutoff ${m.cutoff} Hz\npan ${m.pan.toFixed(2)}`;
   requestAnimationFrame(frame);
 }
 frame();

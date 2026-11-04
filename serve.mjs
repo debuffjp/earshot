@@ -11,8 +11,9 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 const types = { ".html": "text/html", ".js": "text/javascript", ".wav": "audio/wav" };
 const handler = (req, res) => {
   const path = new URL(req.url, "http://x").pathname;
-  const file = join(root, "public", normalize(path === "/" ? "index.html" : path));
-  if (!file.startsWith(join(root, "public")) || !existsSync(file)) { res.writeHead(404); return res.end(); }
+  const base = path.startsWith("/dist/") ? root : join(root, "public");
+  const file = join(base, normalize(path === "/" ? "index.html" : path));
+  if (!file.startsWith(base) || !existsSync(file)) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { "content-type": types[extname(file)] ?? "application/octet-stream", "cache-control": "no-store" });
   res.end(readFileSync(file));
 };

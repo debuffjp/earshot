@@ -63,8 +63,8 @@ try {
   await wake.goto("http://localhost:4710/wake.html");
   await wake.click("#start");
   await wake.click("#mic");
-  await wake.waitForFunction(() => window.demo.floor !== null, null, { timeout: 8000 });
-  const start = await wake.evaluate(() => ({ floor: window.demo.floor, applied: window.demo.log.applied }));
+  await wake.waitForFunction(() => window.demo.micOn, null, { timeout: 8000 });
+  const start = await wake.evaluate(() => ({ applied: window.demo.log.applied }));
   let maxLevel = 0, woke = false;
   for (let i = 0; i < 120; i++) {
     const s = await wake.evaluate(() => ({ level: window.demo.level, m: window.demo.monster.state }));

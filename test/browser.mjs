@@ -67,6 +67,7 @@ try {
   const start = await wake.evaluate(() => ({ applied: window.demo.log.applied }));
   let maxLevel = 0, woke = false;
   for (let i = 0; i < 120; i++) {
+    if (!woke) await wake.evaluate(() => window.demo.teleport(340, 200));
     const s = await wake.evaluate(() => ({ level: window.demo.level, m: window.demo.monster.state }));
     maxLevel = Math.max(maxLevel, s.level); woke ||= s.m === "hunting";
     await sleep(100);
@@ -92,6 +93,14 @@ try {
   await none.keyboard.up(" ");
   assert.equal(await none.evaluate(() => window.demo.chests[0].open), true, "a hum key opens a chest");
   assert.equal(await none.evaluate(() => window.demo.monster.state), "asleep", "a hum doesn't wake it");
+  await none.keyboard.down("x");
+  await sleep(300);
+  assert.equal(await none.evaluate(() => window.demo.monster.state), "asleep", "a far shout behind the wall isn't heard");
+  await none.evaluate(() => window.demo.teleport(280, 100));
+  await sleep(200);
+  assert.equal(await none.evaluate(() => window.demo.monster.state), "hunting", "a near scream carries through the wall");
+  await none.keyboard.up("x");
+  await none.evaluate(() => window.demo.teleport(340, 200));
   await none.keyboard.down("x");
   await sleep(300);
   assert.equal(await none.evaluate(() => window.demo.monster.state), "hunting", "a shout key wakes it");

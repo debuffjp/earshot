@@ -21,7 +21,7 @@ pre{font:12px ui-monospace,monospace;background:#22222b;padding:8px;border-radiu
 <button id="hum" class="off">Hum (Space)</button><button id="shout" class="off">Shout (X)</button><button id="stopmic" class="off">Stop mic</button><button id="music" class="off">Music on/off</button><button id="again" class="off">Recalibrate</button>
 <pre id="info">Nothing is recorded. The sound level is measured on this device and no audio is sent anywhere.</pre>
 </main><script type="module">
-import { createLoudness } from "/dist/index.js";
+import { computeMix, createLoudness, wallsOnGrid, DEFAULT_MATERIALS, DEFAULT_PARAMS } from "/dist/index.js";
 const $ = (id) => document.getElementById(id);
 const c = $("c"), g = c.getContext("2d");
 let ctx, musicBus, loud, keyLevel = 0, rawMode = true;
@@ -81,18 +81,24 @@ $("stopmic").onclick = () => { loud?.disableMic(); log.mode = "keys"; $("say").t
 
 // Placeholder rules for testing mic feel, not a game design.
 const S = 40;
-let player, monster, chests, won, caught, open, opening, heardFor;
+const WALL = { left: 320, right: 360, doorTop: 160, doorBottom: 240 };
+const tiles = Array.from({ length: 10 }, (_, y) => Array.from({ length: 16 }, (_, x) => (x === 8 && (y < 4 || y > 5) ? "solid" : null)));
+const inTiles = (p) => ({ x: p.x / S, y: p.y / S });
+const LEVEL_DB = [0, 10, 20, 30];
+const HEARING_DB = 6;
+let player, monster, chests, won, caught, heardDb = -99;
 const place = () => {
-  player = { x: 60, y: 340 }; monster = { x: 320, y: 190, state: "asleep", tx: 0, ty: 0, calm: 0 };
-  chests = [{ x: 90, y: 80 }, { x: 550, y: 80 }, { x: 560, y: 320 }].map((c) => ({ ...c, open: false, t: 0 }));
-  won = caught = false; heardFor = 0;
+  player = { x: 60, y: 340 }; monster = { x: 480, y: 200, state: "asleep", tx: 0, ty: 0, calm: 0 };
+  chests = [{ x: 90, y: 80 }, { x: 90, y: 320 }, { x: 560, y: 80 }].map((c) => ({ ...c, open: false, t: 0 }));
+  won = caught = false;
 };
+const inWall = (x, y, r) => x > WALL.left - r && x < WALL.right + r && (y < WALL.doorTop + r || y > WALL.doorBottom - r);
 place();
 let playing = false;
 function begin(msg) {
   playing = true; place();
   $("setup").style.display = "none";
-  $("say").textContent = msg ?? "Hum softly beside a chest to open it. Get loud and the monster comes for that spot.";
+  $("say").textContent = msg ?? "Hum softly beside a chest to open it. Get loud where the monster can hear and it comes for that spot. Walls and distance muffle you.";
   $("hum").className = $("shout").className = "";
   showInfo();
 }
@@ -138,14 +144,22 @@ function step(dt, level) {
   let dx = (keys.ArrowRight || keys.d ? 1 : 0) - (keys.ArrowLeft || keys.a ? 1 : 0), dy = (keys.ArrowDown || keys.s ? 1 : 0) - (keys.ArrowUp || keys.w ? 1 : 0);
   if (touch) { dx = touch.x - player.x; dy = touch.y - player.y; if (Math.hypot(dx, dy) < 6) dx = dy = 0; }
   const n = Math.hypot(dx, dy) || 1;
-  player.x = Math.max(20, Math.min(620, player.x + dx / n * v));
-  player.y = Math.max(20, Math.min(380, player.y + dy / n * v));
+  const nx = Math.max(20, Math.min(620, player.x + dx / n * v));
+  const ny = Math.max(20, Math.min(380, player.y + dy / n * v));
+  if (!inWall(nx, player.y, 18)) player.x = nx;
+  if (!inWall(player.x, ny, 18)) player.y = ny;
   for (const ch of chests) {
     if (!ch.open && level === 1 && Math.hypot(player.x - ch.x, player.y - ch.y) < 60) { ch.t += dt; if (ch.t >= 1.5) ch.open = true; }
   }
-  if (level >= 2) { monster.state = "hunting"; monster.tx = player.x; monster.ty = player.y; monster.calm = 5; monster.fast = level === 3; }
+  const a = inTiles(player), b = inTiles(monster);
+  const gain = computeMix(a, b, wallsOnGrid(tiles, a, b), DEFAULT_PARAMS, DEFAULT_MATERIALS).gain;
+  heardDb = level ? LEVEL_DB[level] + 20 * Math.log10(gain + 1e-5) : -99;
+  if (level >= 2 && heardDb >= HEARING_DB) { monster.state = "hunting"; monster.tx = player.x; monster.ty = player.y; monster.calm = 5; monster.fast = level === 3; }
   if (monster.state === "hunting") {
-    const mx = monster.tx - monster.x, my = monster.ty - monster.y, d = Math.hypot(mx, my);
+    // Through the door when the target is on the other side of the wall.
+    const across = (monster.x < WALL.left) !== (monster.tx < WALL.left) && Math.abs(monster.x - 340) > 6;
+    const gx = across ? 340 : monster.tx, gy = across ? 200 : monster.ty;
+    const mx = gx - monster.x, my = gy - monster.y, d = Math.hypot(mx, my);
     if (d > 4) { const mv = (monster.fast ? 190 : 110) * dt; monster.x += mx / d * mv; monster.y += my / d * mv; }
     monster.calm -= dt;
     if (monster.calm <= 0) monster.state = "asleep";
@@ -155,6 +169,8 @@ function step(dt, level) {
 }
 function draw(level) {
   g.fillStyle = "#2a2a35"; g.fillRect(0, 0, 640, 400);
+  g.fillStyle = "#e8e8ef"; g.fillRect(WALL.left, 0, 40, WALL.doorTop); g.fillRect(WALL.left, WALL.doorBottom, 40, 400 - WALL.doorBottom);
+  if (level) { g.fillStyle = heardDb >= HEARING_DB && level >= 2 ? "#ff4d6d" : "#fff"; g.font = "bold 15px system-ui"; g.fillText(heardDb >= HEARING_DB ? (level >= 2 ? "it heard that" : "faint") : "too muffled to hear", 12, 22); }
   for (const ch of chests) {
     g.fillStyle = ch.open ? "#cffb2d" : "#ffb02d"; g.fillRect(ch.x - 18, ch.y - 14, 36, 28);
     if (!ch.open && ch.t > 0) { g.fillStyle = "#fff"; g.fillRect(ch.x - 18, ch.y - 24, 36 * ch.t / 1.5, 5); }

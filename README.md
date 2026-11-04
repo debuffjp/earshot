@@ -133,7 +133,7 @@ Everyone connects to everyone, so upload grows with each player. Rooms stop send
 
 **These controls don't make your game compliant.** Live voice between players can bring legal duties, especially where children may play: COPPA in the US and the Online Safety Act in the UK, for example. A library in the browser can't verify ages, enforce bans, moderate or take reports, so those are yours to plan for. Keep voice off by default and limit it to friends. This isn't legal advice.
 
-Tested with two devices on one network: a PC and an iPhone. Larger groups and connections over the internet are untested.
+Tested with a PC and an iPhone on one network, and on relay between Chromium and Firefox on desktop. Larger groups are untested.
 
 ## With debuff
 

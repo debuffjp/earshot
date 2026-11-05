@@ -566,6 +566,7 @@ export function createLoudness(ctx: AudioContext, options: LoudnessOptions = {})
         lastTick = now;
       }, 30);
       await calibrate();
+      if (!stream) return { ok: false, error: "stopped" };
       return { ok: true };
     },
     recalibrate: calibrate,

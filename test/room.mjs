@@ -71,6 +71,15 @@ try {
     return [await m.start(), await joinVoiceRoom({ mic: m })];
   });
   assert.deepEqual(refused, [{ ok: false, error: "not-allowed" }, { ok: false, error: "mic-not-started" }], "the game can refuse voice");
+  const stopped = await a.page.evaluate(async () => {
+    const { createLoudness } = await import("/dist/index.js");
+    const loud = createLoudness(new AudioContext());
+    const result = loud.enableMic();
+    await new Promise((r) => setTimeout(r, 300));
+    loud.disableMic();
+    return result;
+  });
+  assert.deepEqual(stopped, { ok: false, error: "stopped" }, "turning the mic off during calibration reports it");
   const controls = await c.page.evaluate(async () => {
     const { createVoiceMic } = await import("/dist/index.js");
     const m = createVoiceMic({ canUseVoice: () => true }); await m.start();
